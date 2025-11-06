@@ -149,27 +149,45 @@ class BotaSensor:
         except struct.error as e:
             raise BotaDataError(f"Failed to parse sensor data: {e}")
     
-    def calibrate(self, samples: int = 100) -> None:
+    def calibrate(self, samples: int = 100, verbose: bool = True, sample_interval: float = 0.01) -> None:
         """
         Calibrate sensor by taking zero offset.
         
         Args:
             samples: Number of samples to average for calibration
+            verbose: Whether to print calibration progress
+            sample_interval: Time interval between samples in seconds
         """
         if not self.is_connected():
             raise BotaConnectionError("Sensor is not connected")
         
-        print(f"Calibrating sensor with {samples} samples...")
+        if verbose:
+            print(f"Calibrating sensor with {samples} samples...")
         
         accumulated = [0.0] * 6
-        for i in range(samples):
-            data = self.read_data()
-            values = data.to_list()
-            accumulated = [accumulated[j] + values[j] for j in range(6)]
-            time.sleep(0.01)
+        successful_samples = 0
+        max_retries = samples * 2  # Allow up to 2x retries
         
-        self._calibration_offset = [val / samples for val in accumulated]
-        print(f"Calibration complete. Offset: {self._calibration_offset}")
+        for i in range(max_retries):
+            if successful_samples >= samples:
+                break
+            try:
+                data = self.read_data()
+                values = data.to_list()
+                accumulated = [accumulated[j] + values[j] for j in range(6)]
+                successful_samples += 1
+                time.sleep(sample_interval)
+            except Exception as e:
+                if verbose:
+                    print(f"Warning: Failed to read sample {i+1}: {e}")
+                continue
+        
+        if successful_samples < samples:
+            raise BotaConnectionError(f"Calibration failed: only {successful_samples}/{samples} samples collected")
+        
+        self._calibration_offset = [val / successful_samples for val in accumulated]
+        if verbose:
+            print(f"Calibration complete. Offset: {self._calibration_offset}")
     
     def set_scale_factor(self, scale: float) -> None:
         """
@@ -202,13 +220,14 @@ class BotaSensor:
         self._calibration_offset = [0.0] * 6
         self._scale_factor = 1.0
     
-    def read_continuous(self, duration: float = 1.0, rate: float = 100.0) -> List[ForceTorqueData]:
+    def read_continuous(self, duration: float = 1.0, rate: float = 100.0, verbose: bool = False) -> List[ForceTorqueData]:
         """
         Read data continuously for a specified duration.
         
         Args:
             duration: Duration to read data in seconds
             rate: Desired sampling rate in Hz
+            verbose: Whether to print warnings for failed reads
         
         Returns:
             List of ForceTorqueData readings
@@ -226,7 +245,8 @@ class BotaSensor:
                 readings.append(data)
                 time.sleep(interval)
             except Exception as e:
-                print(f"Warning: Failed to read data: {e}")
+                if verbose:
+                    print(f"Warning: Failed to read data: {e}")
                 continue
         
         return readings
